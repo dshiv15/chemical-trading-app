@@ -5,23 +5,28 @@ from datetime import date
 
 st.set_page_config(page_title="Chemical Trading System", layout="wide")
 
-# Initialize Supabase connection
-# Credentials will be fetched from Streamlit Secrets
-conn = st.connection("supabase", type=SupabaseConnection)
+# --- DATABASE CONNECTION ---
+try:
+    # Initialize connection using Streamlit Secrets [connections.supabase]
+    conn = st.connection("supabase", type=SupabaseConnection)
+except Exception as e:
+    st.error("⚠️ Connection Error: Please verify your Streamlit Secrets configuration.")
+    st.stop()
 
 def load_data():
     try:
-        # Fetch all rows from your Supabase 'transactions' table
+        # Fetch all rows from the 'transactions' table
         response = conn.table("transactions").select("*").execute()
         return pd.DataFrame(response.data)
-    except Exception:
-        # Return empty dataframe if table is empty or doesn't exist yet
+    except Exception as e:
+        # Return empty dataframe with correct columns if table/connection fails
         return pd.DataFrame(columns=[
             "txn_date", "material", "supplier", "purchase_price",
             "transport_cost", "buyer", "delivery_price",
             "pay_supplier", "pay_received", "net_amount"
         ])
 
+# --- SIDEBAR NAVIGATION ---
 st.sidebar.title("🧪 Chemical Trading System")
 menu = st.sidebar.radio(
     "Navigation",
@@ -32,7 +37,8 @@ menu = st.sidebar.radio(
 if menu == "➕ Add Transaction":
     st.title("➕ Add New Transaction")
 
-    with st.form("transaction_form"):
+    # clear_on_submit resets the form after the button is clicked
+    with st.form("transaction_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
 
         with col1:
@@ -53,26 +59,32 @@ if menu == "➕ Add Transaction":
         submit = st.form_submit_button("Save Transaction")
 
     if submit:
-        net_amount = delivery_price - (purchase_price + transport_cost)
+        # Simple validation
+        if not material or not supplier or not buyer:
+            st.warning("⚠️ Please fill in all name fields (Material, Supplier, Buyer) before saving.")
+        else:
+            try:
+                net_amount = delivery_price - (purchase_price + transport_cost)
 
-        # Map your fields to Supabase column names
-        new_row = {
-            "txn_date": str(txn_date),
-            "material": material,
-            "supplier": supplier,
-            "purchase_price": purchase_price,
-            "transport_cost": transport_cost,
-            "buyer": buyer,
-            "delivery_price": delivery_price,
-            "pay_supplier": pay_supplier,
-            "pay_received": pay_received,
-            "net_amount": net_amount
-        }
+                # Map local variables to Supabase column names
+                new_row = {
+                    "txn_date": str(txn_date),
+                    "material": material,
+                    "supplier": supplier,
+                    "purchase_price": purchase_price,
+                    "transport_cost": transport_cost,
+                    "buyer": buyer,
+                    "delivery_price": delivery_price,
+                    "pay_supplier": pay_supplier,
+                    "pay_received": pay_received,
+                    "net_amount": net_amount
+                }
 
-        # Save directly to Supabase
-        conn.table("transactions").insert(new_row).execute()
-
-        st.success(f"Transaction saved successfully ✅ Net Amount: ₹{net_amount}")
+                # Save directly to Supabase table 'transactions'
+                conn.table("transactions").insert(new_row).execute()
+                st.success(f"Transaction saved successfully ✅ Net Amount: ₹{net_amount:,.2f}")
+            except Exception as e:
+                st.error(f"❌ Failed to save transaction: {e}")
 
 # ---------------- COMPANY LEDGER ---------------- #
 elif menu == "📒 Company Ledger":
@@ -80,14 +92,17 @@ elif menu == "📒 Company Ledger":
 
     df = load_data()
     if not df.empty:
-        companies = pd.unique(df[["supplier", "buyer"]].values.ravel("K"))
-        company = st.selectbox("Select Company", companies)
+        # Get unique names from both supplier and buyer columns
+        all_entities = pd.unique(df[["supplier", "buyer"]].values.ravel("K"))
+        company = st.selectbox("Select Company", sorted(all_entities))
 
+        # Filter transactions related to the selected company
         ledger_df = df[
             (df["supplier"] == company) |
             (df["buyer"] == company)
         ].copy()
 
+        # Define the role of the company for each row
         ledger_df["Role"] = ledger_df.apply(
             lambda x: "Supplier" if x["supplier"] == company else "Buyer",
             axis=1
@@ -102,7 +117,7 @@ elif menu == "📒 Company Ledger":
             use_container_width=True
         )
     else:
-        st.info("No data found in database.")
+        st.info("No data found in the database.")
 
 # ---------------- OVERALL REPORT ---------------- #
 elif menu == "📊 Overall Report":
@@ -112,8 +127,9 @@ elif menu == "📊 Overall Report":
 
     if not df.empty:
         total_profit = df["net_amount"].sum()
-        st.metric("💰 Total Net Profit", f"₹ {total_profit}")
+        st.metric("💰 Total Net Profit", f"₹ {total_profit:,.2f}")
 
+        # Display full global ledger
         st.dataframe(
             df[
                 ["txn_date", "material",
@@ -125,4 +141,4 @@ elif menu == "📊 Overall Report":
             use_container_width=True
         )
     else:
-        st.info("No data found in database.")
+        st.info("No data found in the database.")
