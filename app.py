@@ -7,17 +7,23 @@ st.set_page_config(page_title="Chemical Trading System", layout="wide")
 
 # --- DATABASE CONNECTION ---
 try:
-    # Initialize connection using Streamlit Secrets [connections.supabase]
-    conn = st.connection("supabase", type=SupabaseConnection)
+    # We use ttl=None to ensure the connection doesn't drop during the session
+    conn = st.connection("supabase", type=SupabaseConnection, ttl=None)
 except Exception as e:
     st.error("⚠️ Connection Error: Please verify your Streamlit Secrets configuration.")
+    # Show the specific technical error for easier debugging
+    st.exception(e)
     st.stop()
 
 def load_data():
     try:
         # Fetch all rows from the 'transactions' table
         response = conn.table("transactions").select("*").execute()
-        return pd.DataFrame(response.data)
+        # Ensure we handle the response data correctly
+        if response.data:
+            return pd.DataFrame(response.data)
+        else:
+            return pd.DataFrame()
     except Exception as e:
         # Return empty dataframe with correct columns if table/connection fails
         return pd.DataFrame(columns=[
@@ -37,7 +43,6 @@ menu = st.sidebar.radio(
 if menu == "➕ Add Transaction":
     st.title("➕ Add New Transaction")
 
-    # clear_on_submit resets the form after the button is clicked
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
 
@@ -59,14 +64,12 @@ if menu == "➕ Add Transaction":
         submit = st.form_submit_button("Save Transaction")
 
     if submit:
-        # Simple validation
         if not material or not supplier or not buyer:
             st.warning("⚠️ Please fill in all name fields (Material, Supplier, Buyer) before saving.")
         else:
             try:
                 net_amount = delivery_price - (purchase_price + transport_cost)
 
-                # Map local variables to Supabase column names
                 new_row = {
                     "txn_date": str(txn_date),
                     "material": material,
@@ -83,6 +86,8 @@ if menu == "➕ Add Transaction":
                 # Save directly to Supabase table 'transactions'
                 conn.table("transactions").insert(new_row).execute()
                 st.success(f"Transaction saved successfully ✅ Net Amount: ₹{net_amount:,.2f}")
+                # Clear cache so new data shows up immediately
+                st.cache_data.clear()
             except Exception as e:
                 st.error(f"❌ Failed to save transaction: {e}")
 
@@ -91,18 +96,12 @@ elif menu == "📒 Company Ledger":
     st.title("📒 Company Ledger")
 
     df = load_data()
-    if not df.empty:
-        # Get unique names from both supplier and buyer columns
+    if not df.empty and "supplier" in df.columns:
         all_entities = pd.unique(df[["supplier", "buyer"]].values.ravel("K"))
         company = st.selectbox("Select Company", sorted(all_entities))
 
-        # Filter transactions related to the selected company
-        ledger_df = df[
-            (df["supplier"] == company) |
-            (df["buyer"] == company)
-        ].copy()
+        ledger_df = df[(df["supplier"] == company) | (df["buyer"] == company)].copy()
 
-        # Define the role of the company for each row
         ledger_df["Role"] = ledger_df.apply(
             lambda x: "Supplier" if x["supplier"] == company else "Buyer",
             axis=1
@@ -125,11 +124,10 @@ elif menu == "📊 Overall Report":
 
     df = load_data()
 
-    if not df.empty:
+    if not df.empty and "net_amount" in df.columns:
         total_profit = df["net_amount"].sum()
         st.metric("💰 Total Net Profit", f"₹ {total_profit:,.2f}")
 
-        # Display full global ledger
         st.dataframe(
             df[
                 ["txn_date", "material",
