@@ -1,20 +1,26 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+from st_supabase_connection import SupabaseConnection
 import pandas as pd
 from datetime import date
 
 st.set_page_config(page_title="Chemical Trading System", layout="wide")
 
-# --- GOOGLE SHEETS CONNECTION ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Initialize Supabase connection
+# Credentials will be fetched from Streamlit Secrets
+conn = st.connection("supabase", type=SupabaseConnection)
 
 def load_data():
-    # Reads the live data from your Google Sheet
-    return conn.read(ttl="0m")
-
-def save_data(df):
-    # Updates the Google Sheet with the new dataframe
-    conn.update(data=df)
+    try:
+        # Fetch all rows from your Supabase 'transactions' table
+        response = conn.table("transactions").select("*").execute()
+        return pd.DataFrame(response.data)
+    except Exception:
+        # Return empty dataframe if table is empty or doesn't exist yet
+        return pd.DataFrame(columns=[
+            "txn_date", "material", "supplier", "purchase_price",
+            "transport_cost", "buyer", "delivery_price",
+            "pay_supplier", "pay_received", "net_amount"
+        ])
 
 st.sidebar.title("🧪 Chemical Trading System")
 menu = st.sidebar.radio(
@@ -49,22 +55,22 @@ if menu == "➕ Add Transaction":
     if submit:
         net_amount = delivery_price - (purchase_price + transport_cost)
 
+        # Map your fields to Supabase column names
         new_row = {
-            "Date": str(txn_date),
-            "Material": material,
-            "Purchased From": supplier,
-            "Purchase Price": purchase_price,
-            "Transportation Cost": transport_cost,
-            "Delivered To": buyer,
-            "Delivery Price": delivery_price,
-            "Payment To Supplier": pay_supplier,
-            "Payment Received From Buyer": pay_received,
-            "Net Amount": net_amount
+            "txn_date": str(txn_date),
+            "material": material,
+            "supplier": supplier,
+            "purchase_price": purchase_price,
+            "transport_cost": transport_cost,
+            "buyer": buyer,
+            "delivery_price": delivery_price,
+            "pay_supplier": pay_supplier,
+            "pay_received": pay_received,
+            "net_amount": net_amount
         }
 
-        df = load_data()
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        save_data(df)
+        # Save directly to Supabase
+        conn.table("transactions").insert(new_row).execute()
 
         st.success(f"Transaction saved successfully ✅ Net Amount: ₹{net_amount}")
 
@@ -74,48 +80,49 @@ elif menu == "📒 Company Ledger":
 
     df = load_data()
     if not df.empty:
-        companies = pd.unique(df[["Purchased From", "Delivered To"]].values.ravel("K"))
+        companies = pd.unique(df[["supplier", "buyer"]].values.ravel("K"))
         company = st.selectbox("Select Company", companies)
 
         ledger_df = df[
-            (df["Purchased From"] == company) |
-            (df["Delivered To"] == company)
+            (df["supplier"] == company) |
+            (df["buyer"] == company)
         ].copy()
 
         ledger_df["Role"] = ledger_df.apply(
-            lambda x: "Supplier" if x["Purchased From"] == company else "Buyer",
+            lambda x: "Supplier" if x["supplier"] == company else "Buyer",
             axis=1
         )
 
         st.dataframe(
             ledger_df[
-                ["Date", "Material", "Role",
-                 "Purchase Price", "Delivery Price",
-                 "Payment To Supplier", "Payment Received From Buyer"]
+                ["txn_date", "material", "Role",
+                 "purchase_price", "delivery_price",
+                 "pay_supplier", "pay_received"]
             ],
             use_container_width=True
         )
     else:
-        st.info("No data found in the spreadsheet.")
+        st.info("No data found in database.")
 
 # ---------------- OVERALL REPORT ---------------- #
 elif menu == "📊 Overall Report":
     st.title("📊 Overall Trading Report")
 
     df = load_data()
+
     if not df.empty:
-        total_profit = df["Net Amount"].sum()
+        total_profit = df["net_amount"].sum()
         st.metric("💰 Total Net Profit", f"₹ {total_profit}")
 
         st.dataframe(
             df[
-                ["Date", "Material",
-                 "Purchased From", "Purchase Price",
-                 "Transportation Cost",
-                 "Delivered To", "Delivery Price",
-                 "Net Amount"]
+                ["txn_date", "material",
+                 "supplier", "purchase_price",
+                 "transport_cost",
+                 "buyer", "delivery_price",
+                 "net_amount"]
             ],
             use_container_width=True
         )
     else:
-        st.info("No data found in the spreadsheet.")
+        st.info("No data found in database.")
